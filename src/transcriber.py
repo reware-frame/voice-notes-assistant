@@ -1,108 +1,75 @@
-"""
-Audio transcription module using OpenAI Whisper.
-"""
+﻿"""Whisper transcription module."""
+
+from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Optional
-import openai
+from typing import Optional, Union
+
 from dotenv import load_dotenv
+from openai import OpenAI
 
 load_dotenv()
 
+SUPPORTED_AUDIO_EXTENSIONS = {
+    ".mp3",
+    ".mp4",
+    ".mpeg",
+    ".mpga",
+    ".m4a",
+    ".wav",
+    ".webm",
+}
+
+
+@dataclass(frozen=True)
+class TranscriptionResult:
+    """Transcription result returned by Whisper."""
+
+    text: str
+    language: Optional[str]
+    model: str
+
 
 class Transcriber:
-    """Transcribe audio files using OpenAI Whisper."""
-    
-    def __init__(self, api_key: Optional[str] = None):
-        """
-        Initialize transcriber with OpenAI API key.
-        
-        Args:
-            api_key: OpenAI API key. If not provided, uses OPENAI_API_KEY env var.
-        """
-        self.client = openai.OpenAI(
-            api_key=api_key or os.getenv("OPENAI_API_KEY")
-        )
-    
+    """Wraps OpenAI Whisper transcription API calls."""
+
+    def __init__(self, client: Optional[OpenAI] = None, api_key: Optional[str] = None) -> None:
+        resolved_key = api_key or os.getenv("OPENAI_API_KEY")
+        self.client = client or OpenAI(api_key=resolved_key)
+
     def transcribe(
-        self, 
-        audio_path: str, 
+        self,
+        audio_file: Union[str, Path],
         model: str = "whisper-1",
         language: Optional[str] = None,
-        prompt: Optional[str] = None
-    ) -> dict:
-        """
-        Transcribe audio file to text.
-        
-        Args:
-            audio_path: Path to audio file (mp3, mp4, mpeg, mpga, m4a, wav, webm)
-            model: Whisper model to use
-            language: Optional language code (e.g., 'zh', 'en')
-            prompt: Optional prompt to guide transcription
-            
-        Returns:
-            dict: Transcription result with text, segments, etc.
-        """
-        audio_file = Path(audio_path)
-        if not audio_file.exists():
-            raise FileNotFoundError(f"Audio file not found: {audio_path}")
-        
-        with open(audio_path, "rb") as audio:
-            params = {
+        prompt: Optional[str] = None,
+    ) -> TranscriptionResult:
+        """Transcribe an audio file into text."""
+        path = Path(audio_file)
+
+        if not path.exists():
+            raise FileNotFoundError(f"Audio file not found: {path}")
+
+        if path.suffix.lower() not in SUPPORTED_AUDIO_EXTENSIONS:
+            allowed = ", ".join(sorted(SUPPORTED_AUDIO_EXTENSIONS))
+            raise ValueError(f"Unsupported audio extension '{path.suffix}'. Allowed: {allowed}")
+
+        with path.open("rb") as audio_handle:
+            payload = {
                 "model": model,
-                "file": audio,
+                "file": audio_handle,
             }
             if language:
-                params["language"] = language
+                payload["language"] = language
             if prompt:
-                params["prompt"] = prompt
-                
-            response = self.client.audio.transcriptions.create(**params)
-        
-        return {
-            "text": response.text,
-            "model": model,
-            "language": language,
-        }
-    
-    def transcribe_with_timestamps(
-        self,
-        audio_path: str,
-        model: str = "whisper-1",
-        language: Optional[str] = None
-    ) -> dict:
-        """
-        Transcribe with word-level timestamps.
-        
-        Args:
-            audio_path: Path to audio file
-            model: Whisper model to use
-            language: Optional language code
-            
-        Returns:
-            dict: Transcription with timestamps
-        """
-        audio_file = Path(audio_path)
-        if not audio_file.exists():
-            raise FileNotFoundError(f"Audio file not found: {audio_path}")
-        
-        with open(audio_path, "rb") as audio:
-            params = {
-                "model": model,
-                "file": audio,
-                "response_format": "verbose_json",
-                "timestamp_granularities": ["word"]
-            }
-            if language:
-                params["language"] = language
-                
-            response = self.client.audio.transcriptions.create(**params)
-        
-        return {
-            "text": response.text,
-            "segments": response.segments if hasattr(response, 'segments') else [],
-            "words": response.words if hasattr(response, 'words') else [],
-            "model": model,
-            "language": language,
-        }
+                payload["prompt"] = prompt
+
+            response = self.client.audio.transcriptions.create(**payload)
+
+        text = getattr(response, "text", "")
+        if not text:
+            raise ValueError("Whisper returned an empty transcription.")
+
+        return TranscriptionResult(text=text.strip(), language=language, model=model)

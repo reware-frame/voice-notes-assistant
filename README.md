@@ -1,63 +1,74 @@
-# AI Voice Notes Assistant
+﻿# AI Voice Notes Structured Assistant
 
-一个将语音笔记自动转换为结构化笔记的 AI 工具。
+将语音笔记自动转换为结构化 Markdown，核心流程：
+1. Whisper 转文字
+2. GPT-4 智能分类与结构化
+3. 标题/标签/优先级生成
+4. Markdown 导出
 
-## 核心功能
+## Tech Stack
+- Python 3.10+
+- OpenAI Whisper API (`whisper-1`)
+- GPT-4 系列模型（默认 `gpt-4o`）
 
-- 🎤 **语音转文字**: 使用 Whisper API 高精度转录
-- 🧠 **智能分类**: 自动识别内容类型（想法/待办/会议/灵感）
-- 📝 **结构化输出**: 生成带标题、标签、优先级的格式化笔记
-- 🔗 **知识关联**: 语义相似度检测，自动建立双向链接
-- 💭 **情感分析**: 识别语音中的情绪线索
-- ⏰ **智能提醒**: 待办自动同步到日历
+## Project Structure
+```text
+voice-notes-assistant/
+├─ src/
+│  ├─ __init__.py
+│  ├─ transcriber.py
+│  ├─ processor.py
+│  ├─ formatter.py
+│  └─ cli.py
+├─ tests/
+│  ├─ test_transcriber.py
+│  ├─ test_processor.py
+│  ├─ test_formatter.py
+│  └─ test_cli.py
+├─ docs/
+│  └─ architecture.md
+├─ requirements.txt
+├─ .env.example
+└─ README.md
+```
 
-## 快速开始
+## Setup
+```bash
+pip install -r requirements.txt
+cp .env.example .env
+```
+
+编辑 `.env`，至少配置：
 
 ```bash
-# 安装依赖
-pip install -r requirements.txt
-
-# 配置环境变量
-cp .env.example .env
-# 编辑 .env 添加 OpenAI API Key
-
-# 运行 CLI
-python -m src.cli transcribe audio.mp3
+OPENAI_API_KEY=your_openai_api_key
 ```
 
-## 项目结构
+## CLI Usage
 
-```
-voice-notes-assistant/
-├── src/
-│   ├── __init__.py
-│   ├── transcriber.py    # Whisper 转录
-│   ├── processor.py      # GPT-4 结构化处理
-│   ├── formatter.py      # Markdown 格式化
-│   ├── knowledge_graph.py # 知识关联
-│   └── cli.py            # 命令行接口
-├── tests/
-│   ├── test_transcriber.py
-│   ├── test_processor.py
-│   └── test_formatter.py
-├── docs/
-│   └── architecture.md
-├── config/
-│   └── settings.py
-├── scripts/
-│   └── setup.sh
-├── requirements.txt
-├── .env.example
-└── README.md
+从音频到 Markdown（完整链路）：
+
+```bash
+python -m src.cli transcribe ./samples/voice-note.m4a -o ./output/note.md
 ```
 
-## 技术栈
+可选参数示例：
 
-- **ASR**: OpenAI Whisper
-- **LLM**: GPT-4 / Claude
-- **向量数据库**: Pinecone (可选)
-- **集成**: Notion API / Obsidian
+```bash
+python -m src.cli transcribe ./audio.wav \
+  --language zh \
+  --whisper-model whisper-1 \
+  --gpt-model gpt-4o \
+  --hint "这是一次产品会议记录"
+```
 
-## License
+直接处理文本：
 
-MIT
+```bash
+python -m src.cli process-text "明天上午 10 点和设计团队开会，确认首页改版优先级" -o note.md
+```
+
+## Run Tests
+```bash
+pytest -q
+```
