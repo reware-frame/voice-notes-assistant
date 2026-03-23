@@ -13,6 +13,7 @@ from typing import List, Optional
 from dotenv import load_dotenv
 from tqdm import tqdm
 
+from .config import Config, load_config, create_default_config, get_default_config_path
 from .formatter import MarkdownFormatter
 from .processor import Processor, StructuredNote
 from .transcriber import TranscriptionResult, Transcriber
@@ -30,6 +31,13 @@ def build_parser() -> argparse.ArgumentParser:
         description="Transcribe audio and export structured markdown notes.",
     )
 
+    # Global config argument
+    parser.add_argument(
+        "--config",
+        help="Path to configuration file (YAML or JSON).",
+        type=Path,
+    )
+
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     transcribe = subparsers.add_parser("transcribe", help="Run full pipeline from audio to markdown.")
@@ -38,14 +46,18 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe.add_argument("--language", help="Whisper language code, e.g. en/zh.")
     transcribe.add_argument("--prompt", help="Optional prompt for Whisper transcription.")
     transcribe.add_argument("--hint", help="Optional context hint for GPT structuring.")
-    transcribe.add_argument("--whisper-model", default=os.getenv("WHISPER_MODEL", "whisper-1"))
-    transcribe.add_argument("--gpt-model", default=os.getenv("GPT_MODEL", "gpt-4o"))
+    transcribe.add_argument("--whisper-model", help="Whisper model name.")
+    transcribe.add_argument("--gpt-model", help="LLM model name.")
+    transcribe.add_argument("--provider", choices=["openai", "anthropic", "ollama"],
+                          help="LLM provider to use.")
 
     process_text = subparsers.add_parser("process-text", help="Structure raw text and export markdown.")
     process_text.add_argument("text", help="Raw note text.")
     process_text.add_argument("-o", "--output", help="Output markdown file path.")
     process_text.add_argument("--hint", help="Optional context hint.")
-    process_text.add_argument("--gpt-model", default=os.getenv("GPT_MODEL", "gpt-4o"))
+    process_text.add_argument("--gpt-model", help="LLM model name.")
+    process_text.add_argument("--provider", choices=["openai", "anthropic", "ollama"],
+                             help="LLM provider to use.")
 
     batch = subparsers.add_parser("batch", help="Batch process multiple audio files.")
     batch.add_argument("--input-dir", required=True, help="Directory containing audio files.")
@@ -53,11 +65,77 @@ def build_parser() -> argparse.ArgumentParser:
     batch.add_argument("--language", help="Whisper language code, e.g. en/zh.")
     batch.add_argument("--prompt", help="Optional prompt for Whisper transcription.")
     batch.add_argument("--hint", help="Optional context hint for GPT structuring.")
-    batch.add_argument("--whisper-model", default=os.getenv("WHISPER_MODEL", "whisper-1"))
-    batch.add_argument("--gpt-model", default=os.getenv("GPT_MODEL", "gpt-4o"))
+    batch.add_argument("--whisper-model", help="Whisper model name.")
+    batch.add_argument("--gpt-model", help="LLM model name.")
+    batch.add_argument("--provider", choices=["openai", "anthropic", "ollama"],
+                      help="LLM provider to use.")
     batch.add_argument("--report", help="Path for JSON report output.")
 
+    config_cmd = subparsers.add_parser("config", help="Configuration management.")
+    config_cmd.add_argument("--show", action="store_true", help="Show current configuration.")
+    config_cmd.add_argument("--init", action="store_true", help="Initialize default configuration file.")
+
     return parser
+
+
+def resolve_config(args: argparse.Namespace) -> Config:
+    """Resolve configuration from file and command line arguments.
+
+    Priority (highest to lowest):
+    1. Command line arguments
+    2. Config file (from --config or default path)
+    3. Environment variables
+    4. Built-in defaults
+    """
+    # Start with defaults + environment
+    config = create_default_config()
+
+    # Load from config file if specified or exists at default path
+    if args.config:
+        file_config = load_config(args.config)
+        config = config.merge(file_config)
+    else:
+        default_path = get_default_config_path()
+        if default_path.exists():
+            file_config = load_config(default_path)
+            config = config.merge(file_config)
+
+    # Command line overrides
+    provider = getattr(args, "provider", None)
+    whisper_model = getattr(args, "whisper_model", None)
+    gpt_model = getattr(args, "gpt_model", None)
+
+    overrides = {}
+    if provider:
+        overrides["provider"] = provider
+    if whisper_model:
+        overrides["whisper_model"] = whisper_model
+    if gpt_model:
+        overrides["default_model"] = gpt_model
+
+    if overrides:
+        config = config.merge(**overrides)
+
+    return config
+
+
+def validate_config(config: Config) -> Optional[str]:
+    """Validate configuration and return error message if invalid.
+
+    Returns:
+        Error message or None if valid
+    """
+    if config.provider == "openai":
+        if not config.api_key and not os.getenv("OPENAI_API_KEY"):
+            return "Error: OpenAI API key not configured. Set OPENAI_API_KEY environment variable or api_key in config."
+    elif config.provider == "anthropic":
+        if not config.api_key and not os.getenv("ANTHROPIC_API_KEY"):
+            return "Error: Anthropic API key not configured. Set ANTHROPIC_API_KEY environment variable or api_key in config."
+    elif config.provider == "ollama":
+        # Ollama doesn't require an API key, but we should check if it's accessible
+        pass
+
+    return None
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -65,31 +143,86 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    if not os.getenv("OPENAI_API_KEY"):
-        print("Error: OPENAI_API_KEY is not configured.")
+    # Handle config subcommand
+    if args.command == "config":
+        return handle_config_command(args)
+
+    # Resolve configuration
+    config = resolve_config(args)
+
+    # Validate configuration
+    error_msg = validate_config(config)
+    if error_msg:
+        print(error_msg)
         return 1
 
     if args.command == "transcribe":
-        return run_transcribe(args)
+        return run_transcribe(args, config)
     if args.command == "process-text":
-        return run_process_text(args)
+        return run_process_text(args, config)
     if args.command == "batch":
-        return run_batch(args)
+        return run_batch(args, config)
 
     print("Error: Unknown command.")
     return 1
 
 
-def run_transcribe(args: argparse.Namespace) -> int:
-    """Handle full pipeline with Whisper + GPT-4."""
+def handle_config_command(args: argparse.Namespace) -> int:
+    """Handle config subcommand."""
+    if args.show:
+        config = create_default_config()
+        default_path = get_default_config_path()
+        if default_path.exists():
+            file_config = load_config(default_path)
+            config = config.merge(file_config)
+
+        print(f"Configuration file: {default_path}")
+        print(f"Exists: {default_path.exists()}")
+        print("\nCurrent configuration:")
+        print(f"  provider: {config.provider}")
+        print(f"  default_model: {config.default_model}")
+        print(f"  whisper_model: {config.whisper_model}")
+        print(f"  output_dir: {config.output_dir or '(not set)'}")
+        print(f"  template_dir: {config.template_dir or '(not set)'}")
+        print(f"  ollama_url: {config.ollama_url}")
+        print(f"  ollama_model: {config.ollama_model}")
+        print(f"  api_key: {'*****' if config.api_key else '(not set)'}")
+        return 0
+
+    if args.init:
+        default_path = get_default_config_path()
+        if default_path.exists():
+            print(f"Configuration file already exists at: {default_path}")
+            return 0
+
+        config = create_default_config()
+        from .config import save_config
+        save_config(config, default_path)
+        print(f"Created configuration file at: {default_path}")
+        return 0
+
+    print("Error: Use --show or --init with config command.")
+    return 1
+
+
+def run_transcribe(args: argparse.Namespace, config: Config) -> int:
+    """Handle full pipeline with Whisper + LLM."""
     transcriber = Transcriber()
-    processor = Processor(model=args.gpt_model)
+
+    # Create processor from config
+    processor = Processor(
+        provider_type=config.provider,
+        api_key=config.api_key,
+        model=config.default_model,
+        ollama_url=config.ollama_url,
+        ollama_model=config.ollama_model,
+    )
     formatter = MarkdownFormatter()
 
     try:
         result = transcriber.transcribe(
             audio_file=args.audio_file,
-            model=args.whisper_model,
+            model=config.whisper_model,
             language=args.language,
             prompt=args.prompt,
         )
@@ -104,9 +237,16 @@ def run_transcribe(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_process_text(args: argparse.Namespace) -> int:
-    """Handle text-only pipeline with GPT-4."""
-    processor = Processor(model=args.gpt_model)
+def run_process_text(args: argparse.Namespace, config: Config) -> int:
+    """Handle text-only pipeline with LLM."""
+    # Create processor from config
+    processor = Processor(
+        provider_type=config.provider,
+        api_key=config.api_key,
+        model=config.default_model,
+        ollama_url=config.ollama_url,
+        ollama_model=config.ollama_model,
+    )
     formatter = MarkdownFormatter()
 
     try:
@@ -121,7 +261,7 @@ def run_process_text(args: argparse.Namespace) -> int:
     return 0
 
 
-def run_batch(args: argparse.Namespace) -> int:
+def run_batch(args: argparse.Namespace, config: Config) -> int:
     """Batch process multiple audio files with progress bar."""
     input_dir = Path(args.input_dir)
     output_dir = Path(args.output_dir)
@@ -145,7 +285,14 @@ def run_batch(args: argparse.Namespace) -> int:
     print(f"Found {len(audio_files)} audio file(s) to process")
 
     transcriber = Transcriber()
-    processor = Processor(model=args.gpt_model)
+    # Create processor from config
+    processor = Processor(
+        provider_type=config.provider,
+        api_key=config.api_key,
+        model=config.default_model,
+        ollama_url=config.ollama_url,
+        ollama_model=config.ollama_model,
+    )
     formatter = MarkdownFormatter()
 
     results = []
@@ -156,7 +303,7 @@ def run_batch(args: argparse.Namespace) -> int:
         try:
             result = transcriber.transcribe(
                 audio_file=audio_file,
-                model=args.whisper_model,
+                model=config.whisper_model,
                 language=args.language,
                 prompt=args.prompt,
             )
