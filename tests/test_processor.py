@@ -1,68 +1,74 @@
-"""
-Tests for processor module.
-"""
+﻿import json
+from types import SimpleNamespace
 
 import pytest
-import json
-from unittest.mock import Mock, patch
 
-from src.processor import Processor, StructuredNote
+from src.processor import Processor
 
 
-class TestProcessor:
-    """Test cases for Processor class."""
-    
-    @patch('src.processor.openai.OpenAI')
-    def test_init(self, mock_openai):
-        """Test initialization."""
-        processor = Processor(api_key="test-key")
-        mock_openai.assert_called_once_with(api_key="test-key")
-    
-    @patch('src.processor.openai.OpenAI')
-    def test_process_success(self, mock_openai):
-        """Test successful processing."""
-        # Mock response
-        mock_response = Mock()
-        mock_response.choices = [Mock()]
-        mock_response.choices[0].message.content = json.dumps({
-            "title": "Test Note",
-            "category": "idea",
-            "priority": "high",
-            "summary": "Test summary",
-            "key_points": ["Point 1"],
-            "tags": ["test"],
-            "sentiment": "excited",
-            "action_items": ["Action 1"]
-        })
-        mock_openai.return_value.chat.completions.create.return_value = mock_response
-        
-        processor = Processor(api_key="test-key")
-        result = processor.process("This is a test note")
-        
-        assert isinstance(result, StructuredNote)
-        assert result.title == "Test Note"
-        assert result.category == "idea"
-        assert result.priority == "high"
-    
-    @patch('src.processor.openai.OpenAI')
-    def test_batch_process(self, mock_openai):
-        """Test batch processing."""
-        mock_response = Mock()
-        mock_response.choices = [Mock()]
-        mock_response.choices[0].message.content = json.dumps({
-            "title": "Test",
-            "category": "memo",
-            "priority": "medium",
-            "summary": "Summary",
-            "key_points": [],
-            "tags": [],
-            "sentiment": "neutral",
-            "action_items": []
-        })
-        mock_openai.return_value.chat.completions.create.return_value = mock_response
-        
-        processor = Processor(api_key="test-key")
-        results = processor.batch_process(["text1", "text2"])
-        
-        assert len(results) == 2
-        assert all(isinstance(r, StructuredNote) for r in results)
+class FakeCompletions:
+    def __init__(self, content: str) -> None:
+        self.content = content
+        self.calls = []
+
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        message = SimpleNamespace(content=self.content)
+        choice = SimpleNamespace(message=message)
+        return SimpleNamespace(choices=[choice])
+
+
+class FakeClient:
+    def __init__(self, content: str) -> None:
+        self.fake_completions = FakeCompletions(content)
+        self.chat = SimpleNamespace(completions=self.fake_completions)
+
+
+def test_process_successfully_parses_json():
+    payload = {
+        "title": "Sprint planning",
+        "category": "todo",
+        "tags": ["product", "team"],
+        "priority": "high",
+        "summary": "Need to prepare sprint scope and owners.",
+        "action_items": ["Draft ticket list", "Book meeting room"],
+    }
+    client = FakeClient(content=json.dumps(payload))
+    processor = Processor(client=client)
+
+    note = processor.process("Tomorrow we should plan sprint tasks")
+
+    assert note.title == "Sprint planning"
+    assert note.category == "todo"
+    assert note.priority == "high"
+    assert note.tags == ["product", "team"]
+    assert len(note.action_items) == 2
+
+    api_call = client.fake_completions.calls[0]
+    assert api_call["model"] == "gpt-4o"
+
+
+def test_process_invalid_json_raises_error():
+    processor = Processor(client=FakeClient(content="not-json"))
+
+    with pytest.raises(ValueError):
+        processor.process("A quick note")
+
+
+def test_process_normalizes_invalid_values():
+    payload = {
+        "title": "Random",
+        "category": "anything",
+        "tags": ["alpha", "alpha", ""],
+        "priority": "urgent",
+        "summary": "Summary",
+        "action_items": "not-a-list",
+    }
+    processor = Processor(client=FakeClient(content=json.dumps(payload)))
+
+    note = processor.process("test")
+
+    assert note.category == "idea"
+    assert note.priority == "medium"
+    assert note.tags == ["alpha"]
+    assert note.action_items == []

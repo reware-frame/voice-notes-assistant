@@ -1,54 +1,43 @@
-"""
-Tests for formatter module.
-"""
-
-import pytest
-from datetime import datetime
+﻿from datetime import datetime
 
 from src.formatter import MarkdownFormatter
 from src.processor import StructuredNote
 
 
-class TestMarkdownFormatter:
-    """Test cases for MarkdownFormatter."""
-    
-    @pytest.fixture
-    def sample_note(self):
-        """Create a sample note for testing."""
-        return StructuredNote(
-            title="Test Idea",
-            category="idea",
-            priority="high",
-            summary="This is a test summary",
-            key_points=["Point 1", "Point 2"],
-            tags=["test", "idea"],
-            sentiment="excited",
-            action_items=["Action 1"]
-        )
-    
-    def test_format(self, sample_note):
-        """Test full markdown formatting."""
-        formatter = MarkdownFormatter()
-        result = formatter.format(sample_note, created_at=datetime(2024, 3, 23, 10, 0))
-        
-        assert "# 💡 Test Idea" in result
-        assert "**Category**: idea" in result
-        assert "**Priority**: 🔴 high" in result
-        assert "**Sentiment**: 🤩 excited" in result
-        assert "**Tags**: `test`, `idea`" in result
-        assert "## Summary" in result
-        assert "## Key Points" in result
-        assert "- Point 1" in result
-        assert "## Action Items" in result
-        assert "1. [ ] Action 1" in result
-    
-    def test_format_simple(self, sample_note):
-        """Test simple formatting."""
-        formatter = MarkdownFormatter()
-        result = formatter.format_simple(sample_note)
-        
-        assert "## 🔴 💡 Test Idea" in result
-        assert "**IDEA**" in result
-        assert "test, idea" in result
-        assert "Actions:" in result
-        assert "- [ ] Action 1" in result
+def sample_note() -> StructuredNote:
+    return StructuredNote(
+        title="Weekly sync",
+        category="meeting",
+        tags=["team", "sync"],
+        priority="medium",
+        summary="Discussed progress and blockers.",
+        action_items=["Share recap", "Update roadmap"],
+    )
+
+
+def test_format_contains_required_sections():
+    formatter = MarkdownFormatter()
+    markdown = formatter.format(
+        note=sample_note(),
+        source_text="we discussed milestones",
+        generated_at=datetime(2026, 3, 23, 9, 30),
+    )
+
+    assert "# Weekly sync" in markdown
+    assert "## Metadata" in markdown
+    assert "- Category: `meeting`" in markdown
+    assert "- Priority: `medium`" in markdown
+    assert "## Summary" in markdown
+    assert "## Action Items" in markdown
+    assert "## Source Transcript" in markdown
+
+
+def test_export_writes_file(tmp_path):
+    formatter = MarkdownFormatter()
+    output_file = tmp_path / "note.md"
+
+    formatter.export(sample_note(), output_file)
+
+    assert output_file.exists()
+    content = output_file.read_text(encoding="utf-8")
+    assert "Weekly sync" in content
