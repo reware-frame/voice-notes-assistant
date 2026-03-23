@@ -1,4 +1,4 @@
-﻿from pathlib import Path
+from pathlib import Path
 
 from src import cli
 from src.processor import StructuredNote
@@ -80,5 +80,100 @@ def test_main_returns_error_without_api_key(monkeypatch):
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
 
     exit_code = cli.main(["process-text", "hello"])
+
+    assert exit_code == 1
+
+
+def test_batch_command_processes_multiple_files(tmp_path, monkeypatch):
+    """Test batch processing of multiple audio files."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    # Create fake audio files
+    (input_dir / "meeting1.wav").write_bytes(b"fake wav 1")
+    (input_dir / "meeting2.wav").write_bytes(b"fake wav 2")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(cli, "Transcriber", FakeTranscriber)
+    monkeypatch.setattr(cli, "Processor", FakeProcessor)
+    monkeypatch.setattr(cli, "MarkdownFormatter", FakeFormatter)
+
+    exit_code = cli.main([
+        "batch",
+        "--input-dir",
+        str(input_dir),
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    assert exit_code == 0
+    assert (output_dir / "meeting1.md").exists()
+    assert (output_dir / "meeting2.md").exists()
+
+
+def test_batch_command_generates_report(tmp_path, monkeypatch):
+    """Test batch command with report generation."""
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    report_file = tmp_path / "report.json"
+    input_dir.mkdir()
+    output_dir.mkdir()
+
+    (input_dir / "note.m4a").write_bytes(b"fake audio")
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    monkeypatch.setattr(cli, "Transcriber", FakeTranscriber)
+    monkeypatch.setattr(cli, "Processor", FakeProcessor)
+    monkeypatch.setattr(cli, "MarkdownFormatter", FakeFormatter)
+
+    exit_code = cli.main([
+        "batch",
+        "--input-dir",
+        str(input_dir),
+        "--output-dir",
+        str(output_dir),
+        "--report",
+        str(report_file),
+    ])
+
+    assert exit_code == 0
+    assert report_file.exists()
+    content = report_file.read_text(encoding="utf-8")
+    assert "success" in content
+    assert "total_files" in content
+
+
+def test_batch_command_empty_directory(tmp_path, monkeypatch):
+    """Test batch command with empty input directory."""
+    input_dir = tmp_path / "empty_input"
+    output_dir = tmp_path / "output"
+    input_dir.mkdir()
+
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    exit_code = cli.main([
+        "batch",
+        "--input-dir",
+        str(input_dir),
+        "--output-dir",
+        str(output_dir),
+    ])
+
+    assert exit_code == 0
+
+
+def test_batch_command_missing_directory(monkeypatch):
+    """Test batch command with non-existent input directory."""
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+
+    exit_code = cli.main([
+        "batch",
+        "--input-dir",
+        "/non/existent/path",
+        "--output-dir",
+        "/output/path",
+    ])
 
     assert exit_code == 1
